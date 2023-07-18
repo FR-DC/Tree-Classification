@@ -13,6 +13,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio as rio
+import pandas as pd
 #import geowombat as gw
 
 import scipy
@@ -27,6 +28,7 @@ from skimage.segmentation import watershed
 from sklearn.preprocessing import minmax_scale
 
 from enum import Enum
+from tqdm import tqdm
 import gc
 
 # %% Data Ingest
@@ -159,7 +161,7 @@ def meaningless_segmentation(inp: cap_data,
     ax[2].text(TEXT_X, TEXT_Y, 'PATCH MEANINGFUL',
                horizontalalignment='center', transform=ax[2].transAxes)
     fig.tight_layout()
-    #fig.savefig(blob_removal_path)
+    fig.savefig('blob_removal_path.jpg')
 
     print("Binarized.")
 
@@ -177,7 +179,7 @@ def meaningless_segmentation(inp: cap_data,
     fig: plt.Figure
     fig.colorbar(i, ax=ax)
     fig.tight_layout()
-    #fig.savefig(edt_path)
+    fig.savefig('edt_path.jpg')
 
     # ============ PEAK FINDING ============
     print("Finding Peaks...", end=" ")
@@ -195,7 +197,7 @@ def meaningless_segmentation(inp: cap_data,
             horizontalalignment='center', transform=ax.transAxes)
 
     fig.tight_layout()
-    #fig.savefig(peaks_path)
+    fig.savefig('peaks_path.jpg')
 
     print(f"Found {peaks.shape[0]} peaks with Footprint {peaks_footprint}.")
 
@@ -211,7 +213,7 @@ def meaningless_segmentation(inp: cap_data,
     ax.scatter(peaks[..., 1], peaks[..., 0], c='red', s=1)
 
     fig.tight_layout()
-    #fig.savefig(watershed_path)
+    fig.savefig('watershed_path.jpg')
 
     print("Created Watershed Image.")
 
@@ -223,7 +225,7 @@ def meaningless_segmentation(inp: cap_data,
     ax.imshow(minmax_scale(inp.get_bands([Bands.nr, Bands.ng, Bands.nb]).reshape(-1, 3)).reshape(binary.shape + (3,)))
     ax.imshow(binary_dilation(canny, structure=np.ones((canny_thickness, canny_thickness))),
               cmap='gray', alpha=0.5)
-    #fig.savefig(canny_path)
+    fig.savefig('canny_path.jpg')
     
     print("Created Canny Edge Image.")
     
@@ -236,10 +238,63 @@ def meaningless_segmentation(inp: cap_data,
 
     return dict(cap_data=cap_data_, peaks=peaks)
 
-# Note for later.
-ch = chestnut_input_dat('E:\Tree-Classification\chestnut\\10May2021')
-bin = meaningless_segmentation(ch)
-cmap = plt.get_cmap('nipy_spectral')
-cmap = mpl.colors.ListedColormap([cmap(i) for i in np.random.rand(256)])
-cmap.set_bad('black', 1.0)
-plt.imshow(np.ma.MaskedArray(skimage.morphology.remove_small_objects(skimage.measure.label(skimage.morphology.dilation(bin['cap_data'].get_band("CANNY").astype(int), skimage.morphology.square(9)), background=1)), mask=~bin['cap_data'].get_band("BINARY")), interpolation='none', cmap=cmap)
+# %% Actually implement our cropping-out.
+dirpaths = [
+    'E:\Tree-Classification\chestnut\\10May2021',
+    'E:\Tree-Classification\chestnut\\18Dec2020'
+]
+
+def load(dirpath):
+    ch = chestnut_input_dat(dirpath)
+    mnls = meaningless_segmentation(ch)
+    return ch, mnls
+
+def label(ch, mnls):
+    cmap = plt.get_cmap('nipy_spectral')
+    cmap = mpl.colors.ListedColormap([cmap(i) for i in np.random.rand(256)])
+    cmap.set_bad('black', 1.0)
+    labelled = np.ma.MaskedArray(
+        skimage.measure.label(
+            skimage.morphology.dilation(
+                mnls['cap_data'].get_band("CANNY").astype(int),
+                skimage.morphology.square(9)),
+            background=1),
+        mask=~mnls['cap_data'].get_band("BINARY"))
+    labelled = np.ma.masked_values(labelled, 0)
+    fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))
+    plt.imshow(labelled, interpolation='none', cmap=cmap)
+    plt.savefig('labelled.jpg')
+    return ch, mnls, labelled
+
+def bounds_from_labels(ch, mnls, labelled: np.ma.MaskedArray):
+    labels = np.ma.unique(labelled)
+    labels = [i for i in labels if i != 0]
+    vals = []
+    for label in tqdm(labels):
+        matching = labelled == label
+        y, x = np.ma.nonzero(matching)
+        y0 = y[0]
+        y1 = y[-1]
+        x0 = x[0]
+        x1 = x[-1]
+        cropped = matching[y0:y1,x0:x1].astype(int)
+        if np.mean(cropped.data) > 0.2 and np.sum(cropped.data) > 64*64:
+            vals.append((y0, y1, x0, x1))
+            print('accept')
+            break
+        else:
+            print('reject')
+    val = vals[0]
+    print(val)
+    fig, ax = plt.subplots()
+    plt.imshow(ch.get_bands([Bands.wr, Bands.wg, Bands.wb]\
+               .astype(int))[val[0]:val[1],val[2]:val[3]])
+    plt.savefig('example_crop.jpg')
+    df = pd.DataFrame(vals, columns=['y0', 'y1', 'x0', 'x1'])
+    return df
+
+# %% Do the cropping out.
+load_out = load(dirpaths[0])
+label_out = label(*load_out)
+bounds_from_labels_out = bounds_from_labels(*label_out)
+bounds_from_labels_out.to_csv('bounds.csv')
