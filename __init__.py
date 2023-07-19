@@ -254,7 +254,6 @@ def label(ch, mnls):
     
     dilated = binary_dilation(mnls['cap_data'].get_band('CANNY'),
                               structure=np.ones((CANNY_THICKNESS*3, CANNY_THICKNESS*3)))
-    
     fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))
     ax.imshow(dilated, cmap='gray', alpha=1.0, interpolation='none')
     fig.savefig('edges_dilated.tif')
@@ -262,6 +261,7 @@ def label(ch, mnls):
     fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))    
     dilated_mask_1 = np.copy(dilated)
     dilated_mask_1[ch.get_band(Bands.wr).mask] = 1
+    dilated_mask_1[mnls['cap_data'].get_band('WATER') == 0] = 1
     ax.imshow(dilated_mask_1, cmap='gray', alpha=1.0, interpolation='none')
     fig.savefig('dilated_mask_1.tif')
     
