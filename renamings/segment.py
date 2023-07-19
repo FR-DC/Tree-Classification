@@ -53,7 +53,6 @@ class cap_data():
     def __init__(self, ndarrs, labels):
         self.ndarrs = ndarrs
         self.labels = labels
-        self.write_like = None
     
     def get_band(self, band):
         return self.ndarrs[band]
@@ -81,7 +80,6 @@ class chestnut_input_dat(cap_data):
         dirpath = Path(dirpath)
         self.dirpath = dirpath
         self.labels = Bands
-        self.write_like = dirpath / chestnut_input_dat.input_files[0]['filename']
         read_bands = dict()
         for file in chestnut_input_dat.input_files:
             with rio.open(dirpath / file['filename'], mode='r+') as of:
@@ -223,12 +221,12 @@ def meaningless_segmentation(inp: cap_data,
     # ============ CANNY EDGE ============
     print("Running Canny Edge Detection...", end=" ")
     canny = skimage.feature.canny(water.astype('float32'))
-    fig, ax = plt.subplots(figsize=(FIG_SIZE*3, FIG_SIZE*3))
+    fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))
     ax.axis('off')
     ax.imshow(minmax_scale(inp.get_bands([Bands.nr, Bands.ng, Bands.nb]).reshape(-1, 3)).reshape(binary.shape + (3,)))
-    ax.imshow(binary_dilation(canny, structure=np.ones((canny_thickness*3, canny_thickness*3))),
-              cmap='gray', alpha=0.20)
-    fig.savefig('canny_path.tif')
+    ax.imshow(binary_dilation(canny, structure=np.ones((canny_thickness, canny_thickness))),
+              cmap='gray', alpha=0.5)
+    fig.savefig('canny_path.jpg')
     
     print("Created Canny Edge Image.")
     
@@ -284,20 +282,6 @@ def label(ch, mnls):
         ax.plot(bx, by, '-', color='white', linewidth=1)
         #ax.plot(bx, by, '-', color=cmap(color_idx % 256), linewidth=1)
     plt.savefig('labelled_bboxes.tif')
-    
-    with rio.open(ch.write_like, mode='r') as write_like:
-        canny = mnls['cap_data'].get_band('CANNY')
-        with rio.open('labelled.tif',
-                      mode='w',
-                      driver="GTiff",
-                      height=canny.shape[0],
-                      width=canny.shape[1],
-                      count=2,
-                      dtype='int16',
-                      crs=write_like.crs,
-                      transform=write_like.transform) as out:
-            out.write(canny, 1)
-            out.write(labelled, 2)
     
     bboxes = []
     for props in regions:
