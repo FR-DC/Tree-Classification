@@ -8,11 +8,13 @@ Created on Tue Jul 18 15:05:11 2023
 # %% Imports
 
 from pathlib import Path
+import copy
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio as rio
+import rasterio.warp
 import pandas as pd
 #import geowombat as gw
 
@@ -49,24 +51,22 @@ class Bands(Enum):
     red_edge = 8
     dsm = 9
 
-class cap_data():
+class CapData():
     def __init__(self, ndarrs, labels):
         self.ndarrs = ndarrs
         self.labels = labels
-        self.write_like = None
     
     def get_band(self, band):
         return self.ndarrs[band]
 
     def get_bands(self, bands):
-        return np.ma.stack([self.ndarrs[band] for band in bands],
-                        axis=-1)
+        return np.ma.stack([self.get_band(band) for band in bands],
+                           axis=-1)
     
     def get_all_bands(self):
-        return np.ma.stack([self.ndarrs[i] for i in Bands if i in self.ndarrs.keys()],
-                        axis=-1)
+        return self.get_bands(self.labels)
 
-class chestnut_input_dat(cap_data):    
+class chestnut_input_dat(CapData):    
     input_files = [
         {'filename': 'result.tif', 'bands': [Bands.wr, Bands.wg, Bands.wb]},
         {'filename': 'result_Red.tif', 'bands': [Bands.nr]},
@@ -80,21 +80,52 @@ class chestnut_input_dat(cap_data):
     def __init__(self, dirpath):
         dirpath = Path(dirpath)
         self.dirpath = dirpath
-        self.labels = Bands
+        self.labels = list(Bands)
         self.write_like = dirpath / chestnut_input_dat.input_files[0]['filename']
         read_bands = dict()
         for file in chestnut_input_dat.input_files:
-            with rio.open(dirpath / file['filename'], mode='r+') as of:
-                for band, idx in zip(file['bands'], 
-                                     range(1, len(file['bands'])+1)):
-                    if band != Bands.dsm:
-                        read_bands[band] = of.read(idx).astype('float')
-                        # TODO: Get rid of this hack!
-                        nodata = read_bands[band][0,0]
-                        read_bands[band][read_bands[band] == nodata] = float('nan')
-                        read_bands[band] = np.ma.masked_invalid(read_bands[band])
-                    # TODO: Add handling for DSM coregistration.
-        self.ndarrs = read_bands  
+            for band, idx in zip(file['bands'], 
+                                 range(1, len(file['bands'])+1)):
+                read_bands[band] = (dirpath / file['filename'], idx)
+        self.ndarrs = read_bands
+        self.datasets = dict()
+        
+    def get_band(self, band):
+        if band == Bands.dsm:
+            if not isinstance(self.ndarrs[Bands.nir], np.ndarray):
+                self.get_band(Bands.nir)
+
+        if not isinstance(self.ndarrs[band], np.ndarray):
+            path, idx = self.ndarrs[band]
+            with rio.open(path, mode='r+') as of:
+                self.ndarrs[band] = of.read(idx)
+
+                nodata = of.nodata
+                # special case
+                if nodata == None:
+                    nodata = float(0)
+                
+                self.ndarrs[band] = np.ma.masked_equal(self.ndarrs[band], nodata)
+
+                self.datasets[band] = of
+
+            if band == Bands.dsm:
+                dsm_reproj = np.empty_like(self.ndarrs[Bands.nir])
+                rio.warp.reproject(
+                    self.ndarrs[band],
+                    dsm_reproj,
+                    src_transform = self.datasets[Bands.dsm].transform,
+                    src_crs = self.datasets[Bands.dsm].crs,
+                    dst_transform = self.datasets[Bands.nir].transform,
+                    dst_crs = self.datasets[Bands.nir].crs,
+                    resampling  = rio.warp.Resampling.nearest)
+                self.ndarrs[band] = dsm_reproj
+                
+        if band != bands.nir:
+            self.ndarrs[band] = self.ndarrs[band].astype('uint8')
+
+        return self.ndarrs[band]
+    
         
 # %% Meaningless Segmentation (adapted from FRModel)
 FIG_SIZE = 10
@@ -108,11 +139,11 @@ TEXT_Y = 1.02
 PEAKS_FOOTPRINT = 200
 CANNY_THICKNESS = 5
 
-def BIN_FILTER(inp: cap_data):
+def BIN_FILTER(inp: CapData):
     # noinspection PyTypeChecker
     return inp.get_band(Bands.nir) < NIR_THRESHOLD * (2 ** 14)
 
-def meaningless_segmentation(inp: cap_data,
+def meaningless_segmentation(inp: CapData,
                              bin_filter=BIN_FILTER,
                              blob_connectivity=BLOB_CONNECTIVITY,
                              blob_min_size=BLOB_MIN_SIZE,
@@ -139,10 +170,13 @@ def meaningless_segmentation(inp: cap_data,
     fig, ax = plt.subplots(1, 3, figsize=(FIG_SIZE,
                                           FIG_SIZE // 2),
                            sharey=True)
-    binary = np.where(bin_filter(inp), 0, 1).squeeze()
-    if isinstance(inp.get_all_bands(), np.ma.MaskedArray):
-        print("Masked array...")
-        binary = np.logical_and(binary, ~inp.get_all_bands().mask[..., 0])
+    #produce binary array with mask preserved
+    binary = np.ma.where(bin_filter(inp), 0, 1).squeeze()
+    
+    #turn mask into NaN for skimage
+    print("Masked array...")
+    mask = binary.mask
+    binary = binary.filled(fill_value=0)
     
     # ============ BLOB REMOVAL ============
     print("Removing Small Blobs...", end=" ")
@@ -152,14 +186,12 @@ def meaningless_segmentation(inp: cap_data,
     binary = morphology.remove_small_objects(binary.astype(bool),
                                              min_size=blob_min_size,
                                              connectivity=blob_connectivity)
-
     ax[1].imshow(binary, cmap='gray')
     ax[1].text(TEXT_X, TEXT_Y, 'REMOVE MEANINGLESS',
                horizontalalignment='center', transform=ax[1].transAxes)
     binary = ~morphology.remove_small_objects(~binary,
                                               min_size=blob_min_size,
                                               connectivity=blob_connectivity)
-
     ax[2].imshow(binary, cmap='gray')
     ax[2].text(TEXT_X, TEXT_Y, 'PATCH MEANINGFUL',
                horizontalalignment='center', transform=ax[2].transAxes)
@@ -182,7 +214,7 @@ def meaningless_segmentation(inp: cap_data,
     fig: plt.Figure
     fig.colorbar(i, ax=ax)
     fig.tight_layout()
-    fig.savefig('edt_path.jpg')
+    fig.savefig('euclidean_distance_transform_path.jpg')
 
     # ============ PEAK FINDING ============
     print("Finding Peaks...", end=" ")
@@ -237,13 +269,16 @@ def meaningless_segmentation(inp: cap_data,
                   DISTANCES = distances,
                   WATER = water,
                   CANNY = canny)
-    cap_data_ = cap_data(ndarrs, labels)
+    for key, value in ndarrs.items():
+        ndarrs[key] = np.ma.MaskedArray(data=value,
+                                        mask=mask)
+    cap_data_ = CapData(ndarrs, labels)
 
     return dict(cap_data=cap_data_, peaks=peaks)
 
 # %% Actually implement our cropping-out.
-def load(dirpath):
-    ch = chestnut_input_dat(dirpath)
+def load(dirpath, class_):
+    ch = class_(dirpath)
     mnls = meaningless_segmentation(ch)
     return ch, mnls
 
@@ -252,25 +287,26 @@ def label(ch, mnls):
     cmap = mpl.colors.ListedColormap([cmap(i) for i in np.random.rand(256)])
     cmap.set_bad('black', 1.0)
     
-    dilated = binary_dilation(mnls['cap_data'].get_band('CANNY'),
+    dilated = binary_dilation(mnls['cap_data'].get_band('CANNY').filled(),
                               structure=np.ones((CANNY_THICKNESS*3, CANNY_THICKNESS*3)))
+    dilated
     fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))
     ax.imshow(dilated, cmap='gray', alpha=1.0, interpolation='none')
-    fig.savefig('edges_dilated.tif')
+    fig.savefig('edges_dilated.jpg')
 
     fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))    
     dilated_mask_1 = np.copy(dilated)
     dilated_mask_1[ch.get_band(Bands.wr).mask] = 1
     dilated_mask_1[mnls['cap_data'].get_band('WATER') == 0] = 1
     ax.imshow(dilated_mask_1, cmap='gray', alpha=1.0, interpolation='none')
-    fig.savefig('dilated_mask_1.tif')
+    fig.savefig('dilated_mask_1.jpg')
     
     fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))
     labelled = skimage.measure.label(dilated_mask_1, background=1)
     labelled = np.ma.MaskedArray(labelled,
                                  labelled == 0)
     plt.imshow(labelled, interpolation='none', cmap=cmap)
-    plt.savefig('labelled.tif')
+    plt.savefig('labelled.jpg')
     
     fig, ax = plt.subplots(figsize=(FIG_SIZE*4, FIG_SIZE*4))
     plt.imshow(labelled, interpolation='none', cmap=cmap)
@@ -283,21 +319,23 @@ def label(ch, mnls):
         by = (minr, minr, maxr, maxr, minr)
         ax.plot(bx, by, '-', color='white', linewidth=1)
         #ax.plot(bx, by, '-', color=cmap(color_idx % 256), linewidth=1)
-    plt.savefig('labelled_bboxes.tif')
+    plt.savefig('labelled_bboxes.jpg')
     
     with rio.open(ch.write_like, mode='r') as write_like:
         canny = mnls['cap_data'].get_band('CANNY')
-        with rio.open('labelled.tif',
+        water = mnls['cap_data'].get_band('WATER')
+        with rio.open('labels.tif',
                       mode='w',
                       driver="GTiff",
                       height=canny.shape[0],
                       width=canny.shape[1],
-                      count=2,
+                      count=4,
                       dtype='int16',
                       crs=write_like.crs,
                       transform=write_like.transform) as out:
             out.write(canny, 1)
             out.write(labelled, 2)
+            out.write(water, 3)
     
     bboxes = []
     for props in regions:
@@ -308,6 +346,7 @@ def label(ch, mnls):
 
 
 # %% Do the cropping out.
+"""
 os.chdir('E:\Tree-Classification')
 
 dirpaths = [
@@ -317,7 +356,54 @@ dirpaths = [
 
 for dirpath in dirpaths:
     os.chdir(dirpath)
-    load_out = load(dirpath)
+    load_out = load(dirpath, chestnut_input_dat)
+    label_out = label(*load_out)
+    label_out[3].to_csv('bounds.csv')
+    del load_out
+    del label_out
+    gc.collect()
+    """
+# %% Same but for casuarina
+
+os.chdir('E:\Tree-Classification')
+class casuarina_input_dat(chestnut_input_dat):        
+    input_files = [
+        {'filename': '{} result.tif', 'bands': [Bands.wr, Bands.wg, Bands.wb]},
+        {'filename': 'result_Red.tif', 'bands': [Bands.nr]},
+        {'filename': 'result_Green.tif', 'bands': [Bands.ng]},
+        {'filename': 'result_Blue.tif', 'bands': [Bands.nb]},
+        {'filename': 'result_NIR.tif', 'bands': [Bands.nir]},
+        {'filename': 'result_RedEdge.tif', 'bands': [Bands.red_edge]},
+        {'filename': '{} dsm.tif', 'bands': [Bands.dsm]}
+    ]
+    
+    def __init__(self, dirpath):
+        dirpath = Path(dirpath)
+
+        self.input_files = copy.deepcopy(casuarina_input_dat.input_files)
+        name = dirpath.name
+        for dict_ in self.input_files:
+            dict_['filename'] = dict_['filename'].format(name)
+
+        self.dirpath = dirpath
+        self.labels = list(Bands)
+        self.write_like = dirpath / self.input_files[0]['filename']
+        read_bands = dict()
+        for file in self.input_files:
+            for band, idx in zip(file['bands'], 
+                                 range(1, len(file['bands'])+1)):
+                read_bands[band] = (dirpath / file['filename'], idx)
+        self.ndarrs = read_bands
+        self.datasets = dict()
+
+dirpaths = [
+   # R'E:\Tree-Classification\casuarina\93deg',
+    R'E:\Tree-Classification\casuarina\183deg'
+]
+
+for dirpath in dirpaths:
+    os.chdir(dirpath)
+    load_out = load(dirpath, casuarina_input_dat)
     label_out = label(*load_out)
     label_out[3].to_csv('bounds.csv')
     del load_out
