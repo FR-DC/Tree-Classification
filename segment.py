@@ -34,6 +34,8 @@ from tqdm import tqdm
 import gc
 import os
 
+import uuid
+
 # %% Data Ingest
 
 # =============================================================================
@@ -121,7 +123,7 @@ class chestnut_input_dat(CapData):
                     resampling  = rio.warp.Resampling.nearest)
                 self.ndarrs[band] = dsm_reproj
                 
-        if band != bands.nir:
+        if band != Bands.nir:
             self.ndarrs[band] = self.ndarrs[band].astype('uint8')
 
         return self.ndarrs[band]
@@ -289,7 +291,7 @@ def label(ch, mnls):
     
     dilated = binary_dilation(mnls['cap_data'].get_band('CANNY').filled(),
                               structure=np.ones((CANNY_THICKNESS*3, CANNY_THICKNESS*3)))
-    dilated
+    
     fig, ax = plt.subplots(figsize=(FIG_SIZE, FIG_SIZE))
     ax.imshow(dilated, cmap='gray', alpha=1.0, interpolation='none')
     fig.savefig('edges_dilated.jpg')
@@ -307,6 +309,25 @@ def label(ch, mnls):
                                  labelled == 0)
     plt.imshow(labelled, interpolation='none', cmap=cmap)
     plt.savefig('labelled.jpg')
+    
+    all_bands_masked_coregistered = [
+        np.ma.MaskedArray(i,
+                          labelled.mask).filled(fill_value=0)
+        for i in [ch.get_band(j) for j in list(Bands)]
+    ]
+    
+    with rio.open(ch.write_like, mode='r') as write_like:
+        with rio.open('all_bands_masked_coregistered.tif',
+                      mode='w',
+                      driver="GTiff",
+                      height=labelled.shape[0],
+                      width=labelled.shape[1],
+                      count=len(all_bands_masked_coregistered),
+                      dtype='int16',
+                      crs=write_like.crs,
+                      transform=write_like.transform) as out:
+            for i, idx in zip(all_bands_masked_coregistered, range(1, len(all_bands_masked_coregistered)+1)):
+                out.write(i, idx)
     
     fig, ax = plt.subplots(figsize=(FIG_SIZE*4, FIG_SIZE*4))
     plt.imshow(labelled, interpolation='none', cmap=cmap)
@@ -339,19 +360,19 @@ def label(ch, mnls):
     
     bboxes = []
     for props in regions:
-        bboxes.append(props.bbox)
-    bounds = pd.DataFrame(bboxes, columns=['minr', 'minc', 'maxr', 'maxc'])
+        bboxes.append((uuid.uuid4(),) + props.bbox)
+    bounds = pd.DataFrame(bboxes, columns=['uuid', 'minr', 'minc', 'maxr', 'maxc'])
 
     return ch, mnls, labelled, bounds
 
 
 # %% Do the cropping out.
-"""
-os.chdir('E:\Tree-Classification')
+
+os.chdir('/home/pitter/Tree-Classification')
 
 dirpaths = [
-    'E:\Tree-Classification\chestnut\\10May2021',
-    'E:\Tree-Classification\chestnut\\18Dec2020'
+    '/home/pitter/Tree-Classification/chestnut//10May2021',
+    '/home/pitter/Tree-Classification/chestnut//18Dec2020'
 ]
 
 for dirpath in dirpaths:
@@ -362,10 +383,10 @@ for dirpath in dirpaths:
     del load_out
     del label_out
     gc.collect()
-    """
+
 # %% Same but for casuarina
 
-os.chdir('E:\Tree-Classification')
+os.chdir(r"/home/pitter/Tree-Classification")
 class casuarina_input_dat(chestnut_input_dat):        
     input_files = [
         {'filename': '{} result.tif', 'bands': [Bands.wr, Bands.wg, Bands.wb]},
@@ -397,8 +418,8 @@ class casuarina_input_dat(chestnut_input_dat):
         self.datasets = dict()
 
 dirpaths = [
-   # R'E:\Tree-Classification\casuarina\93deg',
-    R'E:\Tree-Classification\casuarina\183deg'
+    R'/home/pitter/Tree-Classification/casuarina//93deg',
+    R'/home/pitter/Tree-Classification/casuarina//183deg'
 ]
 
 for dirpath in dirpaths:
@@ -409,3 +430,47 @@ for dirpath in dirpaths:
     del load_out
     del label_out
     gc.collect()
+    
+# %% Filter the bounds produced
+os.chdir(r"/home/pitter/Tree-Classification")
+
+dirpaths = [
+    R'/home/pitter/Tree-Classification/casuarina//93deg',
+    R'/home/pitter/Tree-Classification/casuarina//183deg',
+    R'/home/pitter/Tree-Classification/chestnut//10May2021',
+    R'/home/pitter/Tree-Classification/chestnut//18Dec2020'
+]
+
+
+for dirpath in dirpaths:
+    filepath = dirpath + '/bounds.csv'
+    csv = pd.read_csv(filepath, index_col=0)
+    csv = csv[(csv['maxr'] - csv['minr'] > 224) & (csv['maxc'] - csv['minc'] > 224)]
+    filepath = dirpath + '/{}_filtered_bounds.csv'.format(Path(dirpath).name)
+    csv.to_csv(filepath)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

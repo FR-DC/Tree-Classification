@@ -12,22 +12,24 @@ import shutil
 import datetime
 import rasterio as rio
 
-os.chdir('E:\Tree-Classification')
+os.chdir('/home/pitter/Tree-Classification')
 
 dirpaths = [
-    'E:\Tree-Classification\chestnut\\10May2021',
-    'E:\Tree-Classification\chestnut\\18Dec2020'
+    R'/home/pitter/Tree-Classification/casuarina//93deg',
+    R'/home/pitter/Tree-Classification/casuarina//183deg',
+    R'/home/pitter/Tree-Classification/chestnut//10May2021',
+    R'/home/pitter/Tree-Classification/chestnut//18Dec2020'
 ]
 dirpaths = [Path(dirpath) for dirpath in dirpaths]
 for dirpath in dirpaths:
     os.chdir(dirpath)
-    bounds = pd.read_csv(dirpath.name + '_bounds.csv')
+    bounds = pd.read_csv(dirpath.name + '_filtered_bounds.csv')
 
     dirname = '{}_cvat_task'.format(dirpath.name)
     os.makedirs(dirname, exist_ok=True)
     os.makedirs(dirname + '/images', exist_ok=True)
     
-    with rio.open('result.tif') as result_tif:
+    with rio.open('result.tif' if 'chestnut' in str(dirpath) else '{} result.tif'.format(dirpath.name)) as result_tif:
         width, height = result_tif.width, result_tif.height
 
     #if not os.path.isfile(dirname + '/images/result.tif'):
