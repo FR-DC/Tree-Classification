@@ -45,10 +45,10 @@ import itertools
 os.chdir('/home/pitter/Tree-Classification')
 
 dirpaths = [
-    R'/home/pitter/Tree-Classification/casuarina//183deg',
     R'/home/pitter/Tree-Classification/casuarina//93deg',
-    R'/home/pitter/Tree-Classification/chestnut//18Dec2020',
+    R'/home/pitter/Tree-Classification/casuarina//183deg',
     R'/home/pitter/Tree-Classification/chestnut//10May2021',
+    R'/home/pitter/Tree-Classification/chestnut//18Dec2020',
 ]
 dirpaths = [Path(i) for i in dirpaths]
 
