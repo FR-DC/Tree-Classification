@@ -206,6 +206,17 @@ for pair in list(itertools.pairwise(images))[::2]:
                    .format(bounds_path1.parent.parent.name, bounds_path1.parent.name, bounds_path2.parent.name))
     matched_filtered.to_csv(bounds_path1.parent.parent / '{}_{}_{}_bounding_boxes_match_filtered.csv'
                    .format(bounds_path1.parent.parent.name, bounds_path1.parent.name, bounds_path2.parent.name))
+    
+    bounds1[bounds1['uuid'].isin(matched_filtered[bounds_path1.parent.name])]\
+        .to_csv(bounds_path1.parent / (bounds_path1.name.split('.')[0] + '_without_unmatched.csv'))
+    bounds2[bounds2['uuid'].isin(matched_filtered[bounds_path2.parent.name])]\
+        .to_csv(bounds_path2.parent / (bounds_path2.name.split('.')[0] + '_without_unmatched.csv'))
+
+# %% To JSON
+
+for csv in Path(r'/home/pitter/Tree-Classification/FilesForGui/').glob('*'):
+    df = pd.read_csv(csv)
+    df.to_json(csv.parent / (csv.name.split('.')[0] + '.json'), default_handler=str)
 
 
 # %% Redraw the bounds with the nearest-neighbours visualised
@@ -240,7 +251,7 @@ for pair in list(itertools.pairwise(images))[::2]:
                                        index_col = 0)
 
         bounds1['in_matched_filtered'] = bounds1['uuid'].isin(matched_filtered[bounds_path1.parent.name])
-        bounds2['in_matched_filtered'] = True
+        bounds2['in_matched_filtered'] = bounds2['uuid'].isin(matched_filtered[bounds_path2.parent.name])
         
         bounds = pd.concat((bounds1, bounds2))
 
@@ -251,8 +262,8 @@ for pair in list(itertools.pairwise(images))[::2]:
             bx = (minc, maxc, maxc, minc, minc)
             by = (minr, minr, maxr, maxr, minr)
             ax.plot(bx, by, '-',
-                    color='blue' if props['origin'] == bounds_path2.parent.name else \
-                                ('red' if props['in_matched_filtered'] else 'white'),
+                    color='white' if not props['in_matched_filtered'] else
+                                ('blue' if props['origin'] == bounds_path1.parent.name else 'red'),
                     linewidth=10)
             texts.append(ax.text(minc+5, maxr-5, '{}: {}'.format(str(idx), props['uuid']), fontsize=12))
         #adjust_text(texts)
